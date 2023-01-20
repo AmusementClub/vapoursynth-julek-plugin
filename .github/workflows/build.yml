@@ -1,0 +1,83 @@
+name: Build Windows
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'which tag to upload to'
+        default: ''
+
+jobs:
+  build-windows:
+    runs-on: windows-2019
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+        submodules: true
+
+    - name: download VS headers
+      shell: bash
+      run: |
+        git clone https://github.com/AmusementClub/vapoursynth-classic --depth=1 --branch doodle2 vapoursynth
+        cp vapoursynth/include/*.h src/
+
+    - name: Build libjxl
+      shell: cmd
+      run: |
+        cd thirdparty
+        cd libjxl
+        git submodule update --init
+        cd ..
+        mkdir libjxl_build
+        cd libjxl_build
+        rem CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded does not work here.
+        cmake -C ../libjxl_cache.cmake ../libjxl -D CMAKE_CXX_FLAGS_RELEASE="/MT /O2 /Ob2 /DNDEBUG" -D CMAKE_C_FLAGS_RELEASE="/MT /O2 /Ob2 /DNDEBUG" -LA
+        cmake --build . --config Release
+        cmake --install .
+
+    - name: Plug in vs-api3
+      shell: bash
+      run: |
+        git clone https://github.com/AmusementClub/vs-api3 --depth=1 --branch master api3
+        cp api3/api3.cc src/
+        sed -i -e "/AGM.cpp/s//& src\\/api3.cc/" CMakeLists.txt
+        cat CMakeLists.txt
+
+    - name: Build
+      shell: cmd
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DVS_INCLUDE_DIR=${{ github.workspace }}/src -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+        cmake --build . --config Release
+
+    - name: Upload
+      uses: actions/upload-artifact@v3
+      with:
+        name: artifact
+        path: |
+          build/Release/julek.dll
+
+    - name: Compress artifact for release
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag != ''
+      run: |
+        cd build\Release
+        7z a -t7z -mx=7 ../../julek-windows-x64.${{ github.event.inputs.tag }}.7z julek.dll
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag != ''
+      with:
+        tag_name: ${{ github.event.inputs.tag }}
+        files: julek-windows-x64.${{ github.event.inputs.tag }}.7z
+        fail_on_unmatched_files: true
+        generate_release_notes: false
+        prerelease: true
